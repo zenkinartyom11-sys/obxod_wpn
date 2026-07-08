@@ -37,10 +37,14 @@ def parse_vless_link(link):
         port = parsed.port
         queries = parse_qs(parsed.query)
         
-        # Получаем параметры (берем первый элемент из списка, если он есть, иначе пустая строка)
-        net_type = queries.get("type", ["tcp"])[0]
-        # Магия исправления: если в ссылке написано raw, для Xray это на самом деле tcp
-        if net_type == "raw":
+        # Безопасное извлечение строк из списков parse_qs
+        def get_param(key, default=""):
+            val = queries.get(key, [default])
+            return val[0] if val else default
+
+        net_type = get_param("type", "tcp")
+        # Жесткое исправление: если в ссылке тип raw, подставляем валидный tcp
+        if net_type == "raw" or not net_type:
             net_type = "tcp"
             
         return {
@@ -48,13 +52,13 @@ def parse_vless_link(link):
             "port": int(port),
             "id": uuid,
             "network": net_type,
-            "security": queries.get("security", ["none"])[0],
-            "sni": queries.get("sni", [""])[0],
-            "pbk": queries.get("pbk", [""])[0],
-            "sid": queries.get("sid", [""])[0],
-            "path": queries.get("path", ["/"])[0],
-            "serviceName": queries.get("serviceName", [""])[0],
-            "host": queries.get("host", [""])[0],
+            "security": get_param("security", "none"),
+            "sni": get_param("sni"),
+            "pbk": get_param("pbk"),
+            "sid": get_param("sid"),
+            "path": get_param("path", "/"),
+            "serviceName": get_param("serviceName"),
+            "host": get_param("host"),
             "name": name
         }
     except Exception as e:
@@ -69,7 +73,7 @@ def check_server_port(ip, port, timeout=2):
         return False
 
 def build_xray_chain(ru_node, foreign_node):
-    # Сборка настроек для зарубежного сервера
+    # Настройки для финального (зарубежного) сервера
     foreign_stream = {
         "network": foreign_node["network"],
         "security": foreign_node["security"],
@@ -103,7 +107,7 @@ def build_xray_chain(ru_node, foreign_node):
             "headers": {"Host": foreign_node["host"] if foreign_node["host"] else foreign_node["sni"]}
         }
 
-    # Сборка настроек для RU сервера
+    # Настройки для транзитного (российского) сервера
     ru_stream = {
         "network": ru_node["network"],
         "security": ru_node["security"]
