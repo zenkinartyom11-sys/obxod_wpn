@@ -20,11 +20,11 @@
             "settings": {
                 "vnext": [
                     {
-                        "address": "178.250.243.25",
-                        "port": 6443,
+                        "address": "176.109.94.202",
+                        "port": 9443,
                         "users": [
                             {
-                                "id": "34ea45dd-b1f1-47c0-9c4e-8c8503defebd",
+                                "id": "35a14133-45f6-40bc-a9cd-918fd0ecb345",
                                 "encryption": "none"
                             }
                         ]
@@ -32,18 +32,20 @@
                 ]
             },
             "streamSettings": {
-                "network": "tcp",
-                "security": "reality",
+                "network": "ws",
+                "security": "tls",
                 "sockopt": {
                     "dialerProxy": "server1-relay"
                 },
-                "realitySettings": {
-                    "show": false,
-                    "fingerprint": "firefox",
-                    "serverName": "myzh.pro",
-                    "publicKey": "KS0F6q2PTY1s6y2sH5PdrznYqprIkUBtS1masvcrJjo",
-                    "shortId": "823257b7b9ab9d02",
-                    "spiderX": "/"
+                "tlsSettings": {
+                    "serverName": "mn-102.hysteria.ltd",
+                    "allowInsecure": false
+                },
+                "wsSettings": {
+                    "path": "/ws",
+                    "headers": {
+                        "Host": "mn-102.hysteria.ltd"
+                    }
                 }
             }
         },
