@@ -37,17 +37,21 @@ def parse_vless_link(link):
         port = parsed.port
         queries = parse_qs(parsed.query)
         
-        # Вытаскиваем все возможные параметры из ссылки
+        # Получаем параметры (берем первый элемент из списка, если он есть, иначе пустая строка)
+        net_type = queries.get("type", ["tcp"])[0]
+        # Магия исправления: если в ссылке написано raw, для Xray это на самом деле tcp
+        if net_type == "raw":
+            net_type = "tcp"
+            
         return {
             "ip": ip,
             "port": int(port),
             "id": uuid,
-            "network": queries.get("type", ["tcp"])[0],
+            "network": net_type,
             "security": queries.get("security", ["none"])[0],
             "sni": queries.get("sni", [""])[0],
             "pbk": queries.get("pbk", [""])[0],
             "sid": queries.get("sid", [""])[0],
-            "flow": queries.get("flow", [""])[0],
             "path": queries.get("path", ["/"])[0],
             "serviceName": queries.get("serviceName", [""])[0],
             "host": queries.get("host", [""])[0],
@@ -65,14 +69,12 @@ def check_server_port(ip, port, timeout=2):
         return False
 
 def build_xray_chain(ru_node, foreign_node):
-    """Строит гибкий JSON на основе вашего шаблона WS-TLS -> gRPC-Reality"""
-    
-    # Сборка настроек стрима для Зарубежного сервера (Финального)
+    # Сборка настроек для зарубежного сервера
     foreign_stream = {
         "network": foreign_node["network"],
         "security": foreign_node["security"],
         "sockopt": {
-            "dialerProxy": "server1-relay"  # Пускаем через RU
+            "dialerProxy": "server1-relay"
         }
     }
     
@@ -101,7 +103,7 @@ def build_xray_chain(ru_node, foreign_node):
             "headers": {"Host": foreign_node["host"] if foreign_node["host"] else foreign_node["sni"]}
         }
 
-    # Сборка настроек стрима для RU сервера (Транзитного)
+    # Сборка настроек для RU сервера
     ru_stream = {
         "network": ru_node["network"],
         "security": ru_node["security"]
@@ -152,7 +154,7 @@ def build_xray_chain(ru_node, foreign_node):
                         "port": foreign_node["port"],
                         "users": [{
                             "id": foreign_node["id"],
-                            "encryption": "none" # Принудительно отключаем ломающий цепочку flow
+                            "encryption": "none"
                         }]
                     }]
                 },
@@ -167,7 +169,7 @@ def build_xray_chain(ru_node, foreign_node):
                         "port": ru_node["port"],
                         "users": [{
                             "id": ru_node["id"],
-                            "encryption": "none" # Убираем flow для транзита
+                            "encryption": "none"
                         }]
                     }]
                 },
@@ -192,7 +194,6 @@ def main():
             
         name_lower = node["name"].lower()
         if "russia" in name_lower or "россия" in name_lower or "ru" in name_lower or "🇷🇺" in node["name"]:
-            # Для транзитного сервера ищем комбинации БЕЗ vision, например WS или обычный TCP
             ru_pool.append(node)
         else:
             foreign_pool.append(node)
@@ -206,14 +207,14 @@ def main():
     for node in ru_pool:
         if check_server_port(node["ip"], node["port"]):
             active_ru = node
-            print(f"-> Выбран живой RU: {node['name']} ({node['network']})")
+            print(f"-> Выбран живой RU: {node['name']} (Сеть: {node['network']})")
             break
             
     print("\n4. Тест зарубежных серверов...")
     for node in foreign_pool:
         if check_server_port(node["ip"], node["port"]):
             active_foreign = node
-            print(f"-> Выбран живой Зарубежный: {node['name']} ({node['network']})")
+            print(f"-> Выбран живой Зарубежный: {node['name']} (Сеть: {node['network']})")
             break
             
     if not active_ru or not active_foreign:
