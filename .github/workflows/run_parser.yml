@@ -30,6 +30,6 @@ jobs:
       run: |
         git config --global user.name "github-actions[bot]"
         git config --global user.email "41898282+github-actions[bot]@://github.com"
-        git add config.json
+        git add "config.json"
         git commit -m "Автообновление конфигурации цепочки" || echo "Нет изменений для коммита"
         git push
