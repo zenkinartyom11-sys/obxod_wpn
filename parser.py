@@ -4,8 +4,10 @@ import sys
 from urllib.parse import urlparse, parse_qs, unquote
 import requests
 
-# 1. Вставьте сюда URL вашей текстовой подписки с GitHub (где лежат строки vless://)
+# =====================================================================
+# ВСТАВЬТЕ СЮДА ВАШУ ССЫЛКУ С ГИТХАБА (ГДЕ ЛЕЖАТ СТРОКИ vless://)
 SUBSCRIBE_URL = "https://raw.githubusercontent.com/igareck/vpn-configs-for-russia/refs/heads/main/Vless-Reality-White-Lists-Rus-Mobile.txt"
+# =====================================================================
 
 def fetch_links(url):
     """Скачивает список ссылок из сети"""
@@ -22,7 +24,7 @@ def parse_vless_link(link):
     if not link.startswith("vless://"):
         return None
     try:
-        # Убираем хэштег с именем в конце, чтобы не мешал парсингу URL
+        # Отделяем имя сервера (всё, что после знака #)
         main_part, *name_part = link.split('#')
         name = unquote(name_part[0]) if name_part else "Без названия"
         
@@ -43,7 +45,6 @@ def parse_vless_link(link):
             "ip": ip,
             "port": int(port),
             "id": uuid,
-            # Извлекаем параметры шифрования Reality
             "sni": queries.get("sni", [""])[0],
             "pbk": queries.get("pbk", [""])[0],
             "sid": queries.get("sid", [""])[0],
@@ -54,20 +55,8 @@ def parse_vless_link(link):
         print(f"Не удалось распарсить ссылку {link[:30]}... Ошибка: {e}")
         return None
 
-def get_server_country(ip):
-    """Определяет страну сервера через бесплатное гео-API"""
-    try:
-        if ip.startswith("127.") or ip.startswith("192."):
-            return "UNKNOWN"
-        res = requests.get(f"http://ip-api.com{ip}", timeout=3).json()
-        if res.get("status") == "success":
-            return res.get("countryCode")  # Вернет "RU", "FI", "DE" и т.д.
-    except Exception:
-        pass
-    return "UNKNOWN"
-
 def check_server_port(ip, port, timeout=2):
-    """Проверяет, открыт ли порт (сервер "жив")"""
+    """Проверяет, открыт ли порт (сервер 'жив')"""
     try:
         with socket.create_connection((ip, port), timeout=timeout):
             return True
@@ -153,19 +142,23 @@ def main():
     ru_pool = []
     foreign_pool = []
     
-    print("\n2. Анализ геолокации IP-адресов...")
+    print("\n2. Фильтрация серверов по НАЗВАНИЮ...")
     for link in raw_links:
         node = parse_vless_link(link)
         if not node:
             continue
             
-        country = get_server_country(node["ip"])
-        print(f"Сервер [{node['name']}] с IP {node['ip']} -> Локация: {country}")
+        name_lower = node["name"].lower()
         
-        if country == "RU":
+        # Проверяем ключевые слова России в названии ссылки
+        if "russia" in name_lower or "россия" in name_lower or "ru" in name_lower or "🇷🇺" in node["name"]:
+            country = "RU"
             ru_pool.append(node)
-        elif country != "UNKNOWN":
+        else:
+            country = "FOREIGN"
             foreign_pool.append(node)
+            
+        print(f"Сервер [{node['name']}] -> Локация определена по имени как: {country}")
             
     print(f"\nСортировка завершена. Найдено серверов РФ: {len(ru_pool)}, Зарубежных: {len(foreign_pool)}")
     
@@ -190,10 +183,10 @@ def main():
         print("\n[ОШИБКА] Не удалось собрать цепочку. Нужен хотя бы 1 живой RU и 1 живой зарубежный сервер.")
         sys.exit(1)
         
-    print(f"\n5. Сборка каскада: Вы -> {active_ru['ip']} -> {active_foreign['ip']}")
+    print(f"\n5. Сборка каскада: Вы -> RU ({active_ru['ip']}) -> Заграничный ({active_foreign['ip']})")
     final_json = build_xray_chain(active_ru, active_foreign)
     
-    # Сохраняем готовый файл для клиента (например, Nekoray или v2rayN)
+    # Сохраняем готовый файл для клиента
     with open("config.json", "w", encoding="utf-8") as f:
         json.dump(final_json, f, indent=4, ensure_ascii=False)
         
