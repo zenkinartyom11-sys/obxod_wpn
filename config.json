@@ -1,0 +1,80 @@
+{
+    "log": {
+        "loglevel": "warning"
+    },
+    "inbounds": [
+        {
+            "port": 10808,
+            "protocol": "socks",
+            "settings": {
+                "auth": "noauth",
+                "udp": true
+            }
+        }
+    ],
+    "outbounds": [
+        {
+            "tag": "foreign-vps",
+            "protocol": "vless",
+            "settings": {
+                "vnext": [
+                    {
+                        "address": "178.250.243.25",
+                        "port": 6443,
+                        "users": [
+                            {
+                                "id": "34ea45dd-b1f1-47c0-9c4e-8c8503defebd",
+                                "encryption": "none",
+                                "flow": "xtls-rprx-vision"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "streamSettings": {
+                "network": "tcp",
+                "security": "reality",
+                "realitySettings": {
+                    "show": false,
+                    "fingerprint": "firefox",
+                    "serverName": "myzh.pro",
+                    "publicKey": "KS0F6q2PTY1s6y2sH5PdrznYqprIkUBtS1masvcrJjo",
+                    "shortId": "823257b7b9ab9d02"
+                },
+                "sockopt": {
+                    "dialerProxy": "ru-transit"
+                }
+            }
+        },
+        {
+            "tag": "ru-transit",
+            "protocol": "vless",
+            "settings": {
+                "vnext": [
+                    {
+                        "address": "62.113.75.187",
+                        "port": 443,
+                        "users": [
+                            {
+                                "id": "1144c488-b3e9-470b-977c-a12fb75b1113",
+                                "encryption": "none",
+                                "flow": "xtls-rprx-vision"
+                            }
+                        ]
+                    }
+                ]
+            },
+            "streamSettings": {
+                "network": "tcp",
+                "security": "reality",
+                "realitySettings": {
+                    "show": false,
+                    "fingerprint": "firefox",
+                    "serverName": "rbc.ru",
+                    "publicKey": "rZgu2lJcC2yrYnx66znee-Z75mW6m4TRfWt7_neoEVI",
+                    "shortId": "caa0a516476ad539"
+                }
+            }
+        }
+    ]
+}
