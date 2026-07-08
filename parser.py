@@ -10,7 +10,6 @@ SUBSCRIBE_URL = "https://raw.githubusercontent.com/igareck/vpn-configs-for-russi
 # =====================================================================
 
 def fetch_links(url):
-    """Скачивает список ссылок из сети"""
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
@@ -20,11 +19,9 @@ def fetch_links(url):
         sys.exit(1)
 
 def parse_vless_link(link):
-    """Разбирает вашу vless ссылку на параметры для Xray JSON"""
     if not link.startswith("vless://"):
         return None
     try:
-        # Отделяем имя сервера (всё, что после знака #)
         main_part, *name_part = link.split('#')
         name = unquote(name_part[0]) if name_part else "Без названия"
         
@@ -32,7 +29,6 @@ def parse_vless_link(link):
         uuid = parsed.username
         hostname = parsed.hostname
         
-        # Получаем чистый IP, если вместо него указан домен
         try:
             ip = socket.gethostbyname(hostname)
         except Exception:
@@ -41,14 +37,20 @@ def parse_vless_link(link):
         port = parsed.port
         queries = parse_qs(parsed.query)
         
+        # Вытаскиваем все возможные параметры из ссылки
         return {
             "ip": ip,
             "port": int(port),
             "id": uuid,
+            "network": queries.get("type", ["tcp"])[0],
+            "security": queries.get("security", ["none"])[0],
             "sni": queries.get("sni", [""])[0],
             "pbk": queries.get("pbk", [""])[0],
             "sid": queries.get("sid", [""])[0],
             "flow": queries.get("flow", [""])[0],
+            "path": queries.get("path", ["/"])[0],
+            "serviceName": queries.get("serviceName", [""])[0],
+            "host": queries.get("host", [""])[0],
             "name": name
         }
     except Exception as e:
@@ -56,7 +58,6 @@ def parse_vless_link(link):
         return None
 
 def check_server_port(ip, port, timeout=2):
-    """Проверяет, открыт ли порт (сервер 'жив')"""
     try:
         with socket.create_connection((ip, port), timeout=timeout):
             return True
@@ -64,71 +65,113 @@ def check_server_port(ip, port, timeout=2):
         return False
 
 def build_xray_chain(ru_node, foreign_node):
-    """Генерирует финальный JSON, заставляя заграничный сервер идти через РУ"""
+    """Строит гибкий JSON на основе вашего шаблона WS-TLS -> gRPC-Reality"""
+    
+    # Сборка настроек стрима для Зарубежного сервера (Финального)
+    foreign_stream = {
+        "network": foreign_node["network"],
+        "security": foreign_node["security"],
+        "sockopt": {
+            "dialerProxy": "server1-relay"  # Пускаем через RU
+        }
+    }
+    
+    if foreign_node["security"] == "reality":
+        foreign_stream["realitySettings"] = {
+            "show": False,
+            "fingerprint": "firefox",
+            "serverName": foreign_node["sni"],
+            "publicKey": foreign_node["pbk"],
+            "shortId": foreign_node["sid"],
+            "spiderX": "/"
+        }
+    elif foreign_node["security"] == "tls":
+        foreign_stream["tlsSettings"] = {
+            "serverName": foreign_node["sni"] if foreign_node["sni"] else foreign_node["host"],
+            "allowInsecure": False
+        }
+
+    if foreign_node["network"] == "grpc":
+        foreign_stream["grpcSettings"] = {
+            "serviceName": foreign_node["serviceName"] if foreign_node["serviceName"] else "grpc-direct"
+        }
+    elif foreign_node["network"] == "ws":
+        foreign_stream["wsSettings"] = {
+            "path": foreign_node["path"],
+            "headers": {"Host": foreign_node["host"] if foreign_node["host"] else foreign_node["sni"]}
+        }
+
+    # Сборка настроек стрима для RU сервера (Транзитного)
+    ru_stream = {
+        "network": ru_node["network"],
+        "security": ru_node["security"]
+    }
+    
+    if ru_node["security"] == "reality":
+        ru_stream["realitySettings"] = {
+            "show": False,
+            "fingerprint": "firefox",
+            "serverName": ru_node["sni"],
+            "publicKey": ru_node["pbk"],
+            "shortId": ru_node["sid"],
+            "spiderX": "/"
+        }
+    elif ru_node["security"] == "tls":
+        ru_stream["tlsSettings"] = {
+            "serverName": ru_node["sni"] if ru_node["sni"] else ru_node["host"],
+            "allowInsecure": False
+        }
+
+    if ru_node["network"] == "ws":
+        ru_stream["wsSettings"] = {
+            "path": ru_node["path"],
+            "headers": {"Host": ru_node["host"] if ru_node["host"] else ru_node["sni"]}
+        }
+    elif ru_node["network"] == "grpc":
+        ru_stream["grpcSettings"] = {
+            "serviceName": ru_node["serviceName"] if ru_node["serviceName"] else "grpc-direct"
+        }
+
     config = {
         "log": {"loglevel": "warning"},
         "inbounds": [
             {
-                "port": 10808,  # Локальный порт SOCKS5 на вашем ПК
+                "port": 10808,
+                "listen": "127.0.0.1",
                 "protocol": "socks",
                 "settings": {"auth": "noauth", "udp": True}
             }
         ],
         "outbounds": [
             {
-                "tag": "foreign-vps",
+                "tag": "server2-final",
                 "protocol": "vless",
                 "settings": {
                     "vnext": [{
                         "address": foreign_node["ip"],
                         "port": foreign_node["port"],
                         "users": [{
-                            "id": foreign_node["id"], 
-                            "encryption": "none",
-                            "flow": foreign_node["flow"] if foreign_node["flow"] else "xtls-rprx-vision"
+                            "id": foreign_node["id"],
+                            "encryption": "none" # Принудительно отключаем ломающий цепочку flow
                         }]
                     }]
                 },
-                "streamSettings": {
-                    "network": "tcp",
-                    "security": "reality",
-                    "realitySettings": {
-                        "show": False,
-                        "fingerprint": "firefox",
-                        "serverName": foreign_node["sni"],
-                        "publicKey": foreign_node["pbk"],
-                        "shortId": foreign_node["sid"]
-                    },
-                    "sockopt": {
-                        "dialerProxy": "ru-transit"  # Связываем цепочку здесь
-                    }
-                }
+                "streamSettings": foreign_stream
             },
             {
-                "tag": "ru-transit",
+                "tag": "server1-relay",
                 "protocol": "vless",
                 "settings": {
                     "vnext": [{
                         "address": ru_node["ip"],
                         "port": ru_node["port"],
                         "users": [{
-                            "id": ru_node["id"], 
-                            "encryption": "none",
-                            "flow": ru_node["flow"] if ru_node["flow"] else "xtls-rprx-vision"
+                            "id": ru_node["id"],
+                            "encryption": "none" # Убираем flow для транзита
                         }]
                     }]
                 },
-                "streamSettings": {
-                    "network": "tcp",
-                    "security": "reality",
-                    "realitySettings": {
-                        "show": False,
-                        "fingerprint": "firefox",
-                        "serverName": ru_node["sni"],
-                        "publicKey": ru_node["pbk"],
-                        "shortId": ru_node["sid"]
-                    }
-                }
+                "streamSettings": ru_stream
             }
         ]
     }
@@ -137,7 +180,6 @@ def build_xray_chain(ru_node, foreign_node):
 def main():
     print("1. Загрузка списка серверов...")
     raw_links = fetch_links(SUBSCRIBE_URL)
-    print(f"Успешно загружено строк: {len(raw_links)}")
     
     ru_pool = []
     foreign_pool = []
@@ -149,48 +191,42 @@ def main():
             continue
             
         name_lower = node["name"].lower()
-        
-        # Проверяем ключевые слова России в названии ссылки
         if "russia" in name_lower or "россия" in name_lower or "ru" in name_lower or "🇷🇺" in node["name"]:
-            country = "RU"
+            # Для транзитного сервера ищем комбинации БЕЗ vision, например WS или обычный TCP
             ru_pool.append(node)
         else:
-            country = "FOREIGN"
             foreign_pool.append(node)
             
-        print(f"Сервер [{node['name']}] -> Локация определена по имени как: {country}")
-            
-    print(f"\nСортировка завершена. Найдено серверов РФ: {len(ru_pool)}, Зарубежных: {len(foreign_pool)}")
+    print(f"\nНайдено потенциальных RU: {len(ru_pool)}, Зарубежных: {len(foreign_pool)}")
     
     active_ru = None
     active_foreign = None
     
-    print("\n3. Проверка доступности российских прокси...")
+    print("\n3. Тест RU серверов...")
     for node in ru_pool:
         if check_server_port(node["ip"], node["port"]):
             active_ru = node
-            print(f"-> Выбран рабочий RU сервер: {node['name']} ({node['ip']})")
+            print(f"-> Выбран живой RU: {node['name']} ({node['network']})")
             break
             
-    print("\n4. Проверка доступности зарубежных прокси...")
+    print("\n4. Тест зарубежных серверов...")
     for node in foreign_pool:
         if check_server_port(node["ip"], node["port"]):
             active_foreign = node
-            print(f"-> Выбран рабочий Зарубежный сервер: {node['name']} ({node['ip']})")
+            print(f"-> Выбран живой Зарубежный: {node['name']} ({node['network']})")
             break
             
     if not active_ru or not active_foreign:
-        print("\n[ОШИБКА] Не удалось собрать цепочку. Нужен хотя бы 1 живой RU и 1 живой зарубежный сервер.")
+        print("\n[ОШИБКА] Не удалось собрать рабочую пару.")
         sys.exit(1)
         
-    print(f"\n5. Сборка каскада: Вы -> RU ({active_ru['ip']}) -> Заграничный ({active_foreign['ip']})")
+    print(f"\n5. Сборка каскада по вашему шаблону...")
     final_json = build_xray_chain(active_ru, active_foreign)
     
-    # Сохраняем готовый файл для клиента
     with open("config.json", "w", encoding="utf-8") as f:
         json.dump(final_json, f, indent=4, ensure_ascii=False)
         
-    print("\n[ГОТОВО] Скрипт создал файл config.json. Настройки успешно обновлены!")
+    print("\n[ГОТОВО] Скрипт переписал config.json под новый рабочий формат!")
 
 if __name__ == "__main__":
     main()
