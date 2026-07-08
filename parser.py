@@ -1,6 +1,7 @@
+import json
 import socket
 import sys
-from urllib.parse import urlparse, parse_qs, unquote, urlencode
+from urllib.parse import urlparse, parse_qs, unquote
 import requests
 
 # =====================================================================
@@ -12,17 +13,23 @@ def fetch_links(url):
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
-        return [line.strip() for line in response.text.splitlines() if line.strip()]
+        lines = [line.strip() for line in response.text.splitlines() if line.strip()]
+        return lines
     except Exception as e:
         print(f"Ошибка при скачивании списка серверов: {e}")
         sys.exit(1)
 
 def parse_vless_link(link):
-    if not isinstance(link, str) or not link.startswith("vless://"):
+    if isinstance(link, list):
+        link = str(link[0]) if link else ""
+    else:
+        link = str(link)
+
+    if not link.startswith("vless://"):
         return None
     try:
         main_part, *name_part = link.split('#')
-        name = unquote(name_part[0]) if name_part else "Node"
+        name = unquote(name_part) if name_part else "Без названия"
         
         parsed = urlparse(main_part)
         uuid = parsed.username
@@ -38,7 +45,7 @@ def parse_vless_link(link):
         
         def get_param(key, default=""):
             val = queries.get(key, [default])
-            return val[0] if val else default
+            return str(val[0]) if val else default
 
         net_type = get_param("type", "tcp")
         if net_type == "raw" or not net_type:
@@ -56,11 +63,9 @@ def parse_vless_link(link):
             "path": get_param("path", "/"),
             "serviceName": get_param("serviceName"),
             "host": get_param("host"),
-            "flow": get_param("flow"),
             "name": name
         }
     except Exception as e:
-        print(f"Ошибка парсинга: {e}")
         return None
 
 def check_server_port(ip, port, timeout=2):
@@ -70,10 +75,134 @@ def check_server_port(ip, port, timeout=2):
     except Exception:
         return False
 
-def main():
-    print("1. Скачивание списка...")
-    raw_links = fetch_links(SUBSCRIBE_URL)
+def build_xray_chain(ru_node, foreign_node):
+    # Настройки стрима для Зарубежного сервера
+    foreign_stream = {
+        "network": foreign_node["network"],
+        "security": foreign_node["security"]
+    }
     
+    if foreign_node["security"] == "reality":
+        foreign_stream["realitySettings"] = {
+            "show": False,
+            "fingerprint": "firefox",
+            "serverName": foreign_node["sni"],
+            "publicKey": foreign_node["pbk"],
+            "shortId": foreign_node["sid"],
+            "spiderX": "/"
+        }
+    elif foreign_node["security"] == "tls":
+        foreign_stream["tlsSettings"] = {
+            "serverName": foreign_node["sni"] if foreign_node["sni"] else foreign_node["host"],
+            "allowInsecure": False
+        }
+
+    if foreign_node["network"] == "grpc":
+        foreign_stream["grpcSettings"] = {
+            "serviceName": foreign_node["serviceName"] if foreign_node["serviceName"] else "grpc-direct"
+        }
+    elif foreign_node["network"] == "ws":
+        foreign_stream["wsSettings"] = {
+            "path": foreign_node["path"],
+            "headers": {"Host": foreign_node["host"] if foreign_node["host"] else foreign_node["sni"]}
+        }
+
+    # Настройки стрима для Российского сервера
+    ru_stream = {
+        "network": ru_node["network"],
+        "security": ru_node["security"]
+    }
+    
+    if ru_node["security"] == "reality":
+        ru_stream["realitySettings"] = {
+            "show": False,
+            "fingerprint": "firefox",
+            "serverName": ru_node["sni"],
+            "publicKey": ru_node["pbk"],
+            "shortId": ru_node["sid"],
+            "spiderX": "/"
+        }
+    elif ru_node["security"] == "tls":
+        ru_stream["tlsSettings"] = {
+            "serverName": ru_node["sni"] if ru_node["sni"] else ru_node["host"],
+            "allowInsecure": False
+        }
+
+    if ru_node["network"] == "ws":
+        ru_stream["wsSettings"] = {
+            "path": ru_node["path"],
+            "headers": {"Host": ru_node["host"] if ru_node["host"] else ru_node["sni"]}
+        }
+    elif ru_node["network"] == "grpc":
+        ru_stream["grpcSettings"] = {
+            "serviceName": ru_node["serviceName"] if ru_node["serviceName"] else "grpc-direct"
+        }
+
+    config = {
+        "log": {"loglevel": "warning"},
+        "inbounds": [
+            {
+                "port": 10808,
+                "protocol": "socks",
+                "settings": {"auth": "noauth", "udp": True}
+            },
+            {
+                "port": 10809,  # Отдельный порт под мост для RU трафика
+                "protocol": "socks",
+                "settings": {"auth": "noauth", "udp": True}
+            }
+        ],
+        "routing": {
+            "domainStrategy": "AsIs",
+            "rules": [
+                {
+                    "type": "field",
+                    "inboundTag": ["socks"],
+                    "outboundTag": "server2-final"
+                }
+            ]
+        },
+        "outbounds": [
+            {
+                "tag": "server2-final",
+                "protocol": "vless",
+                "settings": {
+                    "vnext": [{
+                        "address": foreign_node["ip"],
+                        "port": foreign_node["port"],
+                        "users": [{
+                            "id": foreign_node["id"],
+                            "encryption": "none"
+                        }]
+                    }]
+                },
+                "streamSettings": foreign_stream,
+                # Перенаправляем трафик в локальный порт первого сервера
+                "proxySettings": {
+                    "tag": "server1-relay"
+                }
+            },
+            {
+                "tag": "server1-relay",
+                "protocol": "vless",
+                "settings": {
+                    "vnext": [{
+                        "address": ru_node["ip"],
+                        "port": ru_node["port"],
+                        "users": [{
+                            "id": ru_node["id"],
+                            "encryption": "none"
+                        }]
+                    }]
+                },
+                "streamSettings": ru_stream
+            }
+        ]
+    }
+    return config
+
+def main():
+    raw_links = fetch_links(SUBSCRIBE_URL)
     ru_pool = []
     foreign_pool = []
     
@@ -90,47 +219,23 @@ def main():
     active_ru = None
     active_foreign = None
     
-    print("\n2. Поиск рабочего RU...")
     for node in ru_pool:
         if check_server_port(node["ip"], node["port"]):
             active_ru = node
             break
             
-    print("\n3. Поиск рабочего Зарубежного...")
     for node in foreign_pool:
         if check_server_port(node["ip"], node["port"]):
             active_foreign = node
             break
             
     if not active_ru or not active_foreign:
-        print("[ОШИБКА] Нет рабочей пары серверов.")
         sys.exit(1)
         
-    # Собираем параметры зарубежного сервера
-    params = {
-        "type": active_foreign["network"],
-        "security": active_foreign["security"],
-    }
-    if active_foreign["security"] == "reality":
-        params.update({
-            "sni": active_foreign["sni"],
-            "pbk": active_foreign["pbk"],
-            "sid": active_foreign["sid"]
-        })
-    if active_foreign["network"] == "ws":
-        params.update({"path": active_foreign["path"], "host": active_foreign["host"]})
-        
-    # Магия для HAP: передаем данные транзитного RU-сервера прямо внутрь ссылки
-    params["outboundProxy"] = f"vless://{active_ru['id']}@{active_ru['ip']}:{active_ru['port']}?type={active_ru['network']}&security={active_ru['security']}&sni={active_ru['sni']}&pbk={active_ru['pbk']}&sid={active_ru['sid']}"
+    final_json = build_xray_chain(active_ru, active_foreign)
     
-    # Итоговая ссылка
-    chain_link = f"vless://{active_foreign['id']}@{active_foreign['ip']}:{active_foreign['port']}?{urlencode(params)}#Chain_VPN"
-    
-    # Сохраняем в текстовый файл, который HAP скушает без проблем
-    with open("links.txt", "w", encoding="utf-8") as f:
-        f.write(chain_link + "\n")
-        
-    print("\n[ГОТОВО] Ссылка успешно создана в файле links.txt!")
+    with open("config.json", "w", encoding="utf-8") as f:
+        json.dump(final_json, f, indent=4, ensure_ascii=False)
 
 if __name__ == "__main__":
     main()
